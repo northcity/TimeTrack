@@ -12,6 +12,7 @@ struct EntryDetailView: View {
     @Bindable var viewModel: TimeTrackingViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
+    @State private var showEditSheet = false
 
     var body: some View {
         List {
@@ -95,6 +96,12 @@ struct EntryDetailView: View {
             }
 
             Section {
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Label("编辑记录", systemImage: "pencil")
+                }
+
                 Button(role: .destructive) {
                     showDeleteConfirm = true
                 } label: {
@@ -104,6 +111,18 @@ struct EntryDetailView: View {
         }
         .navigationTitle(DateHelper.shortDateString(entry.startTime))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Text("编辑")
+                }
+            }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            EditEntryView(viewModel: viewModel, entry: entry)
+        }
         .alert("确认删除", isPresented: $showDeleteConfirm) {
             Button("删除", role: .destructive) {
                 viewModel.deleteEntry(entry)

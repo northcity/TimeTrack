@@ -38,6 +38,18 @@ struct MainTabView: View {
                     Label("周报", systemImage: "chart.line.uptrend.xyaxis")
                 }
                 .tag(3)
+
+            MonthlyLedgerView(viewModel: viewModel)
+                .tabItem {
+                    Label("月报", systemImage: "book.closed.fill")
+                }
+                .tag(4)
+
+            YearlyLedgerView(viewModel: viewModel)
+                .tabItem {
+                    Label("年报", systemImage: "chart.bar.doc.horizontal")
+                }
+                .tag(5)
         }
         .onAppear {
             viewModel.setup(context: modelContext)

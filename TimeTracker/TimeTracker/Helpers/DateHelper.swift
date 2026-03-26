@@ -81,6 +81,22 @@ enum DateHelper {
     static func nextWeekStart(from date: Date) -> Date {
         calendar.date(byAdding: .day, value: 7, to: startOfWeek(date)) ?? date
     }
+
+    /// 日期 + 时间格式化：3月19日 09:30
+    static func shortDateTimeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日 HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// 年月格式化：2026年3月
+    static func yearMonthString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年M月"
+        return formatter.string(from: date)
+    }
 }
 
 // MARK: - TimeInterval Extension

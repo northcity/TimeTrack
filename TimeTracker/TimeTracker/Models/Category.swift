@@ -39,17 +39,17 @@ enum TimeCategory: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .input:       return "book.fill"
         case .output:      return "pencil.and.outline"
-        case .consumption: return "sparkles.tv"
-        case .maintenance: return "house.fill"
+        case .consumption: return "play.tv.fill"
+        case .maintenance: return "heart.fill"
         }
     }
 
     var color: Color {
         switch self {
-        case .input:       return .blue
-        case .output:      return .green
-        case .consumption: return .orange
-        case .maintenance: return .purple
+        case .input:       return TTDesign.SemanticColor.input
+        case .output:      return TTDesign.SemanticColor.output
+        case .consumption: return TTDesign.SemanticColor.consumption
+        case .maintenance: return TTDesign.SemanticColor.maintenance
         }
     }
 

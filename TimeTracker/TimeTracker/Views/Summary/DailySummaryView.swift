@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Charts
 
 struct DailySummaryView: View {
     @Bindable var viewModel: TimeTrackingViewModel
@@ -23,8 +24,26 @@ struct DailySummaryView: View {
                     // 总览卡片
                     overviewCard(summary: summary)
 
+                    // 时间质量评分（F-27/28）
+                    QualityScoreCardView(scoreResult: summary.qualityScore)
+
+                    // 深度工作卡片（F-24/25）
+                    DeepWorkCardView(
+                        count: summary.deepWorkCount,
+                        duration: summary.formattedDeepWorkDuration,
+                        entries: summary.deepWorkEntries
+                    )
+
+                    // 消耗预算（F-41）
+                    if DateHelper.isToday(currentDate) {
+                        ConsumptionBudgetView(status: viewModel.todayConsumptionStatus)
+                    }
+
                     // 分类详情
                     categoryBreakdown(summary: summary)
+
+                    // 时间结构条（输入/输出/消耗/维持）
+                    timeStructureBar(summary: summary)
 
                     // 空白时间提示
                     gapSection
@@ -32,12 +51,24 @@ struct DailySummaryView: View {
                     // 洞察提示
                     insightsSection(summary: summary)
 
+                    // AI 行为建议（F-33）
+                    if DateHelper.isToday(currentDate) {
+                        BehaviorSuggestionView(viewModel: viewModel)
+                    }
+
                     // 今日记录列表
                     entriesListSection(summary: summary)
                 }
                 .padding()
             }
             .navigationTitle("日报")
+            .sheet(isPresented: $viewModel.showingBackfill) {
+                AddEntryView(
+                    viewModel: viewModel,
+                    presetStart: viewModel.backfillPresetStart,
+                    presetEnd: viewModel.backfillPresetEnd
+                )
+            }
         }
     }
 
@@ -105,10 +136,8 @@ struct DailySummaryView: View {
             Divider().frame(height: 40)
 
             VStack(spacing: 8) {
-                Text("\(Int(summary.outputScore * 100))%")
-                    .font(.title2.bold())
-                    .foregroundStyle(scoreColor(summary.outputScore))
-                Text("效率")
+                MiniScoreView(score: summary.qualityScore.totalScore, size: 40)
+                Text("质量分")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -190,7 +219,7 @@ struct DailySummaryView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("补记录") {
-                                viewModel.showingBackfill = true
+                                viewModel.startBackfill(start: gap.start, end: gap.end)
                             }
                             .font(.caption)
                             .buttonStyle(.borderedProminent)
@@ -202,6 +231,56 @@ struct DailySummaryView: View {
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
             }
         }
+    }
+
+    // MARK: - 时间结构条（Swift Charts 升级）
+    private func timeStructureBar(summary: DailySummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("时间结构")
+                .font(.headline)
+
+            // Swift Charts 扇形图
+            Chart {
+                ForEach(TimeCategory.allCases) { cat in
+                    let time = summary.totalTimePerCategory[cat] ?? 0
+                    SectorMark(
+                        angle: .value(cat.displayName, max(time, 0)),
+                        innerRadius: .ratio(0.55),
+                        angularInset: 2
+                    )
+                    .foregroundStyle(cat.color.gradient)
+                    .cornerRadius(4)
+                }
+            }
+            .frame(height: 140)
+
+            // 各分类占比文字 + 判断
+            ForEach(TimeCategory.allCases) { cat in
+                let ratio = summary.totalTrackedTime > 0
+                    ? (summary.totalTimePerCategory[cat] ?? 0) / summary.totalTrackedTime
+                    : 0
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(cat.color)
+                        .frame(width: 8, height: 8)
+                    Text(cat.displayName)
+                        .font(.caption)
+                    Text("\(Int(ratio * 100))%")
+                        .font(.caption.bold())
+                        .foregroundStyle(cat.color)
+                    Spacer()
+                    Text(summary.formattedTime(for: cat))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // 人话判断
+                    Text(structureJudgment(for: cat, ratio: ratio))
+                        .font(.caption2)
+                        .foregroundStyle(structureJudgmentColor(for: cat, ratio: ratio))
+                }
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: - 洞察提示
@@ -294,5 +373,42 @@ struct DailySummaryView: View {
         if score >= 0.5 { return .green }
         if score >= 0.3 { return .orange }
         return .red
+    }
+
+    /// 时间结构人话判断
+    private func structureJudgment(for category: TimeCategory, ratio: Double) -> String {
+        switch category {
+        case .output:
+            if ratio >= 0.30 { return "优秀" }
+            if ratio >= 0.15 { return "达标" }
+            if ratio > 0 { return "⚠️ 不足" }
+            return "⚠️ 严重不足"
+        case .input:
+            if ratio >= 0.30 { return "充足" }
+            if ratio >= 0.20 { return "达标" }
+            return "偏低"
+        case .consumption:
+            if ratio <= 0.15 { return "控制优秀" }
+            if ratio <= 0.25 { return "正常" }
+            if ratio <= 0.40 { return "⚠️ 偏高" }
+            return "🚨 严重超标"
+        case .maintenance:
+            if ratio >= 0.30 && ratio <= 0.40 { return "正常" }
+            if ratio > 0.40 { return "偏多" }
+            return "偏少"
+        }
+    }
+
+    private func structureJudgmentColor(for category: TimeCategory, ratio: Double) -> Color {
+        switch category {
+        case .output:
+            return ratio >= 0.15 ? .green : .red
+        case .input:
+            return ratio >= 0.20 ? .green : .orange
+        case .consumption:
+            return ratio <= 0.25 ? .green : .red
+        case .maintenance:
+            return .secondary
+        }
     }
 }

@@ -48,6 +48,47 @@ struct WeeklySummary: Identifiable {
         dailySummaries.map { ($0.date, $0.outputScore) }
     }
 
+    // MARK: - 深度工作统计（F-24/25）
+
+    /// 本周深度工作总次数
+    var totalDeepWorkCount: Int {
+        dailySummaries.reduce(0) { $0 + $1.deepWorkCount }
+    }
+
+    /// 本周深度工作总时长
+    var totalDeepWorkDuration: TimeInterval {
+        dailySummaries.reduce(0) { $0 + $1.deepWorkDuration }
+    }
+
+    /// 格式化深度工作时长
+    var formattedDeepWorkDuration: String {
+        formatInterval(totalDeepWorkDuration)
+    }
+
+    // MARK: - 时间质量评分（F-26/27）
+
+    /// 周质量评分
+    var qualityScore: QualityScoreResult {
+        RuleBasedScoringEngine().score(summary: self)
+    }
+
+    /// 每日质量评分趋势
+    var dailyQualityScores: [(date: Date, score: Double)] {
+        dailySummaries.map { ($0.date, $0.qualityScore.totalScore) }
+    }
+
+    // MARK: - 消耗预算（F-41）
+
+    /// 本周消耗总时间
+    var weeklyConsumptionTime: TimeInterval {
+        totalTimePerCategory[.consumption] ?? 0
+    }
+
+    /// 本周消耗是否超预算
+    var isConsumptionOverBudget: Bool {
+        weeklyConsumptionTime > ScoringConfig.default.weeklyConsumptionBudget
+    }
+
     /// 格式化周总时间
     var formattedTotalTime: String {
         formatInterval(totalTrackedTime)
@@ -75,6 +116,16 @@ struct WeeklySummary: Identifiable {
         let outputTotal = totalTimePerCategory[.output] ?? 0
         if outputTotal > 10 * 3600 {
             tips.append("本周创作/输出时间充足，保持节奏！")
+        }
+
+        if totalDeepWorkCount >= 5 {
+            tips.append("本周深度工作 \(totalDeepWorkCount) 次，合计 \(formattedDeepWorkDuration)，专注力出色！")
+        } else if totalDeepWorkCount > 0 {
+            tips.append("本周深度工作 \(totalDeepWorkCount) 次，试试增加连续专注时段")
+        }
+
+        if isConsumptionOverBudget {
+            tips.append("⚠️ 本周消耗时间已超出预算（15小时），注意调整")
         }
 
         return tips

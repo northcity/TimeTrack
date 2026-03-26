@@ -6,10 +6,12 @@
 //
 
 import SwiftUI
+import Charts
 
 struct WeeklyReviewView: View {
     @Bindable var viewModel: TimeTrackingViewModel
     @State private var currentWeekStart: Date = DateHelper.startOfWeek(Date())
+    @State private var showShareCard = false
 
     var body: some View {
         NavigationStack {
@@ -23,8 +25,20 @@ struct WeeklyReviewView: View {
                     // 周总览
                     weekOverviewCard(summary: summary)
 
-                    // 每日输出评分趋势
-                    dailyTrendChart(summary: summary)
+                    // 周质量评分（F-26/27/28）
+                    QualityScoreCardView(scoreResult: summary.qualityScore)
+
+                    // 时间雷达图（F-18）
+                    radarChart(summary: summary)
+
+                    // 深度工作周统计（F-24/25）
+                    weekDeepWorkCard(summary: summary)
+
+                    // 每日质量评分趋势
+                    dailyQualityTrendChart(summary: summary)
+
+                    // 每日分类堆叠图（Swift Charts）
+                    dailyStackedChart(summary: summary)
 
                     // 分类饼图概览
                     categoryPieChart(summary: summary)
@@ -38,6 +52,21 @@ struct WeeklyReviewView: View {
                 .padding()
             }
             .navigationTitle("周报")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showShareCard = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
+            .sheet(isPresented: $showShareCard) {
+                ShareCardView(
+                    summary: viewModel.weeklySummary(for: currentWeekStart),
+                    weekStart: currentWeekStart
+                )
+            }
         }
     }
 
@@ -95,10 +124,8 @@ struct WeeklyReviewView: View {
                 Divider().frame(height: 40)
 
                 VStack(spacing: 6) {
-                    Text("\(Int(summary.averageOutputScore * 100))%")
-                        .font(.title2.bold())
-                        .foregroundStyle(scoreColor(summary.averageOutputScore))
-                    Text("平均效率")
+                    MiniScoreView(score: summary.qualityScore.totalScore, size: 40)
+                    Text("质量分")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -114,62 +141,171 @@ struct WeeklyReviewView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
+
+                Divider().frame(height: 40)
+
+                VStack(spacing: 6) {
+                    Text("\(summary.totalDeepWorkCount)")
+                        .font(.title2.bold())
+                        .foregroundStyle(.blue)
+                    Text("深度工作")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
             }
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    // MARK: - 每日输出评分趋势（柱状图）
-    private func dailyTrendChart(summary: WeeklySummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("每日效率趋势")
-                .font(.headline)
+    // MARK: - 时间雷达图（F-18）
+    private func radarChart(summary: WeeklySummary) -> some View {
+        let total = summary.totalTrackedTime
+        var actualData: [TimeCategory: Double] = [:]
+        for cat in TimeCategory.allCases {
+            actualData[cat] = total > 0 ? (summary.totalTimePerCategory[cat] ?? 0) / total : 0
+        }
+        return RadarChartView(
+            data: actualData,
+            idealData: RadarChartView.idealDistribution
+        )
+    }
 
+    // MARK: - 深度工作周统计（F-24/25）
+    private func weekDeepWorkCard(summary: WeeklySummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "brain.head.profile")
+                    .foregroundStyle(.blue)
+                Text("深度工作周统计")
+                    .font(.headline)
+                Spacer()
+            }
+
+            HStack(spacing: 20) {
+                VStack(spacing: 4) {
+                    Text("\(summary.totalDeepWorkCount)")
+                        .font(.title.bold())
+                        .foregroundStyle(.blue)
+                    Text("总次数")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: 4) {
+                    Text(summary.formattedDeepWorkDuration)
+                        .font(.title.bold())
+                        .foregroundStyle(.blue)
+                    Text("总时长")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            // 每日深度工作条形
             HStack(alignment: .bottom, spacing: 8) {
                 ForEach(summary.dailySummaries) { daily in
                     VStack(spacing: 4) {
-                        Text("\(Int(daily.outputScore * 100))%")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(scoreColor(daily.outputScore).gradient)
-                            .frame(
-                                width: 32,
-                                height: max(CGFloat(daily.outputScore) * 120, 4)
-                            )
-
+                        if daily.deepWorkCount > 0 {
+                            Text("\(daily.deepWorkCount)")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.blue)
+                            ForEach(0..<daily.deepWorkCount, id: \.self) { _ in
+                                Image(systemName: "flame.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.orange)
+                            }
+                        } else {
+                            Text("-")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
                         Text(DateHelper.weekdayString(daily.date))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 160, alignment: .bottom)
+            .frame(height: 60, alignment: .bottom)
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    // MARK: - 分类饼图概览
+    // MARK: - 每日质量评分趋势（Swift Charts）
+    private func dailyQualityTrendChart(summary: WeeklySummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("每日质量评分")
+                .font(.headline)
+
+            Chart {
+                ForEach(summary.dailySummaries) { daily in
+                    let score = daily.qualityScore.totalScore
+                    BarMark(
+                        x: .value("日期", DateHelper.weekdayString(daily.date)),
+                        y: .value("评分", score)
+                    )
+                    .foregroundStyle(qualityScoreColor(score).gradient)
+                    .cornerRadius(6)
+                    .annotation(position: .top, alignment: .center) {
+                        if score > 0 {
+                            Text("\(Int(score))")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                // 及格线
+                RuleMark(y: .value("及格", 60))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .foregroundStyle(.orange.opacity(0.5))
+                    .annotation(position: .trailing, alignment: .leading) {
+                        Text("及格")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.orange)
+                    }
+            }
+            .chartYScale(domain: 0...100)
+            .chartYAxis {
+                AxisMarks(values: [0, 25, 50, 75, 100]) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    AxisValueLabel {
+                        Text("\(value.as(Int.self) ?? 0)")
+                            .font(.system(size: 9))
+                    }
+                }
+            }
+            .frame(height: 180)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - 分类饼图概览（Swift Charts SectorMark）
     private func categoryPieChart(summary: WeeklySummary) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("分类占比")
                 .font(.headline)
 
             HStack(spacing: 16) {
-                // 简化饼图：使用环形占比
-                ZStack {
-                    ForEach(Array(pieSliceData(summary: summary).enumerated()), id: \.offset) { index, slice in
-                        Circle()
-                            .trim(from: slice.startAngle, to: slice.endAngle)
-                            .stroke(slice.color, lineWidth: 20)
-                            .rotationEffect(.degrees(-90))
+                Chart {
+                    ForEach(TimeCategory.allCases) { cat in
+                        let time = summary.totalTimePerCategory[cat] ?? 0
+                        SectorMark(
+                            angle: .value(cat.displayName, max(time, 0)),
+                            innerRadius: .ratio(0.55),
+                            angularInset: 2
+                        )
+                        .foregroundStyle(cat.color.gradient)
+                        .cornerRadius(4)
                     }
                 }
-                .frame(width: 100, height: 100)
+                .frame(width: 120, height: 120)
 
                 // 图例
                 VStack(alignment: .leading, spacing: 8) {
@@ -183,6 +319,9 @@ struct WeeklyReviewView: View {
                             Text(cat.displayName)
                                 .font(.caption)
                             Spacer()
+                            Text(time.shortFormatted)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             Text("\(Int(ratio * 100))%")
                                 .font(.caption.bold())
                                 .foregroundStyle(cat.color)
@@ -191,6 +330,47 @@ struct WeeklyReviewView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - 每日分类堆叠图（Swift Charts）
+    private func dailyStackedChart(summary: WeeklySummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("每日时间分布")
+                .font(.headline)
+
+            Chart {
+                ForEach(summary.dailySummaries) { daily in
+                    ForEach(TimeCategory.allCases) { cat in
+                        let hours = (daily.totalTimePerCategory[cat] ?? 0) / 3600
+                        BarMark(
+                            x: .value("日期", DateHelper.weekdayString(daily.date)),
+                            y: .value("小时", hours)
+                        )
+                        .foregroundStyle(by: .value("分类", cat.displayName))
+                    }
+                }
+            }
+            .chartForegroundStyleScale([
+                TimeCategory.input.displayName: TimeCategory.input.color,
+                TimeCategory.output.displayName: TimeCategory.output.color,
+                TimeCategory.consumption.displayName: TimeCategory.consumption.color,
+                TimeCategory.maintenance.displayName: TimeCategory.maintenance.color
+            ])
+            .chartYAxis {
+                AxisMarks(values: .automatic) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) {
+                            Text("\(Int(v))h")
+                                .font(.system(size: 9))
+                        }
+                    }
+                }
+            }
+            .frame(height: 200)
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -281,33 +461,13 @@ struct WeeklyReviewView: View {
         return .red
     }
 
-    private struct PieSlice {
-        let startAngle: CGFloat
-        let endAngle: CGFloat
-        let color: Color
-    }
-
-    private func pieSliceData(summary: WeeklySummary) -> [PieSlice] {
-        var slices: [PieSlice] = []
-        var currentAngle: CGFloat = 0
-
-        guard summary.totalTrackedTime > 0 else {
-            return [PieSlice(startAngle: 0, endAngle: 1, color: .secondary.opacity(0.2))]
+    private func qualityScoreColor(_ score: Double) -> Color {
+        let level = QualityScoreResult.ScoreLevel.from(score: score)
+        switch level {
+        case .excellent: return .green
+        case .good: return .blue
+        case .average: return .orange
+        case .poor: return .red
         }
-
-        for cat in TimeCategory.allCases {
-            let time = summary.totalTimePerCategory[cat] ?? 0
-            let ratio = CGFloat(time / summary.totalTrackedTime)
-            if ratio > 0 {
-                slices.append(PieSlice(
-                    startAngle: currentAngle,
-                    endAngle: currentAngle + ratio,
-                    color: cat.color
-                ))
-                currentAngle += ratio
-            }
-        }
-
-        return slices
     }
 }
