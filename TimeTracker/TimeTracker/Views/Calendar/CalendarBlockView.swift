@@ -2,7 +2,7 @@
 //  CalendarBlockView.swift
 //  TimeTracker
 //
-//  日历时间块视图 - 日/周模式
+//  日历视图 - 日、周、月、年穿插视图
 //
 
 import SwiftUI
@@ -16,6 +16,8 @@ struct CalendarBlockView: View {
     enum CalendarViewMode: String, CaseIterable {
         case day = "日"
         case week = "周"
+        case month = "月"
+        case year = "年"
     }
 
     var body: some View {
@@ -23,7 +25,7 @@ struct CalendarBlockView: View {
             VStack(spacing: 0) {
                 // MARK: - 顶部导航
                 headerBar
-
+                
                 // MARK: - 视图模式切换
                 Picker("视图", selection: $viewMode) {
                     ForEach(CalendarViewMode.allCases, id: \.self) { mode in
@@ -34,592 +36,456 @@ struct CalendarBlockView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 8)
 
-                // MARK: - 日历内容
+                // MARK: - 日历
                 switch viewMode {
                 case .day:
-                    DayCalendarView(
-                        viewModel: viewModel,
-                        date: currentDate,
-                        selectedEntry: $selectedEntry
-                    )
+                    AppleDayTimelineView(viewModel: viewModel, date: currentDate, selectedEntry: $selectedEntry)
                 case .week:
-                    WeekCalendarView(
-                        viewModel: viewModel,
-                        weekStartDate: DateHelper.startOfWeek(currentDate),
-                        selectedEntry: $selectedEntry
-                    )
+                    AppleWeekTimelineView(viewModel: viewModel, date: currentDate, selectedEntry: $selectedEntry)
+                case .month:
+                    AppleMonthCalendarView(viewModel: viewModel, date: currentDate)
+                case .year:
+                    AppleYearHeatmapView(viewModel: viewModel, date: currentDate)
                 }
             }
-            .navigationTitle("日历")
+            .navigationTitle("时间轴")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $selectedEntry) { entry in
-                NavigationStack {
-                    EntryDetailView(entry: entry, viewModel: viewModel)
-                }
-                .presentationDetents([.medium, .large])
-            }
-            .sheet(isPresented: $viewModel.showingBackfill) {
-                AddEntryView(
-                    viewModel: viewModel,
-                    presetStart: viewModel.backfillPresetStart,
-                    presetEnd: viewModel.backfillPresetEnd
-                )
+                EntryDetailView(entry: entry, viewModel: viewModel)
+                    .presentationDetents([.medium, .large])
             }
         }
     }
-
-    // MARK: - 顶部日期导航
+    
     private var headerBar: some View {
         HStack {
-            Button {
-                withAnimation {
-                    if viewMode == .day {
-                        currentDate = Calendar.current.date(byAdding: .day, value: -1, to: currentDate) ?? currentDate
-                    } else {
-                        currentDate = DateHelper.previousWeekStart(from: currentDate)
-                    }
-                }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.title3)
+            Button(action: { changeDate(by: -1) }) {
+                Image(systemName: "chevron.left").padding()
             }
-
             Spacer()
+            Text(dateHeaderText)
+                .font(.headline)
+                .bold()
+            Spacer()
+            Button(action: { changeDate(by: 1) }) {
+                Image(systemName: "chevron.right").padding()
+            }
+            Button("今天") {
+                currentDate = Date()
+            }
+            .padding(.trailing)
+        }
+    }
+    
+    private var dateHeaderText: String {
+        let formatter = DateFormatter()
+        switch viewMode {
+        case .day:
+            formatter.dateFormat = "M月d日 EEEE"
+        case .week:
+            let start = DateHelper.startOfWeek(currentDate)
+            let end = Calendar.current.date(byAdding: .day, value: 6, to: start) ?? currentDate
+            formatter.dateFormat = "M月d日"
+            return "\(formatter.string(from: start)) - \(formatter.string(from: end))"
+        case .month:
+            formatter.dateFormat = "yyyy年 M月"
+        case .year:
+            formatter.dateFormat = "yyyy年"
+        }
+        return formatter.string(from: currentDate)
+    }
+    
+    private func changeDate(by value: Int) {
+        let cal = Calendar.current
+        switch viewMode {
+        case .day:
+            currentDate = cal.date(byAdding: .day, value: value, to: currentDate) ?? currentDate
+        case .week:
+            currentDate = cal.date(byAdding: .weekOfYear, value: value, to: currentDate) ?? currentDate
+        case .month:
+            currentDate = cal.date(byAdding: .month, value: value, to: currentDate) ?? currentDate
+        case .year:
+            currentDate = cal.date(byAdding: .year, value: value, to: currentDate) ?? currentDate
+        }
+    }
+}
 
-            VStack(spacing: 2) {
-                if viewMode == .day {
-                    Text(DateHelper.fullDateString(currentDate))
-                        .font(.headline)
-                    Text(DateHelper.weekdayString(currentDate))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+// MARK: - Timeline Layout Engine
+struct LayoutItem: Equatable {
+    let entry: TimeEntry
+    var col: Int
+    var maxCol: Int
+}
+
+class TimelineLayoutEngine {
+    static func layout(entries: [TimeEntry]) -> [LayoutItem] {
+        let sorted = entries.sorted { $0.startTime < $1.startTime }
+        var result: [LayoutItem] = []
+        var activeColumns: [(endTime: Date, col: Int)] = []
+        
+        for entry in sorted {
+            activeColumns.removeAll { $0.endTime <= entry.startTime }
+            activeColumns.sort { $0.col < $1.col }
+            
+            var colIndex = 0
+            for col in activeColumns {
+                if col.col == colIndex {
+                    colIndex += 1
                 } else {
-                    let weekStart = DateHelper.startOfWeek(currentDate)
-                    let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-                    Text("\(DateHelper.shortDateString(weekStart)) - \(DateHelper.shortDateString(weekEnd))")
-                        .font(.headline)
+                    break
                 }
             }
+            
+            let endTime = entry.endTime ?? Date()
+            activeColumns.append((endTime: endTime, col: colIndex))
+            
+            result.append(LayoutItem(entry: entry, col: colIndex, maxCol: activeColumns.count))
+        }
+        
+        for i in 0..<result.count {
+            let item = result[i]
+            let overlaps = result.filter { r in
+                let end1 = item.entry.endTime ?? Date()
+                let end2 = r.entry.endTime ?? Date()
+                return item.entry.startTime < end2 && r.entry.startTime < end1
+            }
+            let maxCol = overlaps.map { $0.col }.max() ?? 0
+            result[i].maxCol = maxCol + 1
+        }
+        
+        return result
+    }
+}
 
-            Spacer()
-
-            Button {
-                withAnimation {
-                    if viewMode == .day {
-                        currentDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
-                    } else {
-                        currentDate = DateHelper.nextWeekStart(from: currentDate)
+// MARK: - AppleDayTimelineView
+struct AppleDayTimelineView: View {
+    var viewModel: TimeTrackingViewModel
+    var date: Date
+    @Binding var selectedEntry: TimeEntry?
+    
+    let hourHeight: CGFloat = 60
+    
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    ForEach(0..<24) { hour in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("\(hour):00")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                                .frame(width: 45, alignment: .bottomTrailing)
+                                .offset(y: -6)
+                            
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 1)
+                        }
+                        .frame(height: hourHeight, alignment: .top)
                     }
                 }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.title3)
-            }
-
-            // 回到今天
-            Button {
-                withAnimation {
-                    currentDate = Date()
+                
+                let entries = viewModel.entries(for: date)
+                let layoutItems = TimelineLayoutEngine.layout(entries: entries)
+                
+                GeometryReader { geo in
+                    let leftPadding: CGFloat = 53
+                    let availableWidth = geo.size.width - leftPadding - 10
+                    
+                    ForEach(Array(layoutItems.enumerated()), id: \.element.entry.id) { index, item in
+                        let yOffset = CGFloat(item.entry.startMinuteOfDay()) / 60.0 * hourHeight
+                        let durationMins = CGFloat(item.entry.endMinuteOfDay() - item.entry.startMinuteOfDay())
+                        let blockHeight = max(durationMins / 60.0 * hourHeight, 15)
+                        
+                        let width = availableWidth / CGFloat(item.maxCol)
+                        let xOffset = leftPadding + width * CGFloat(item.col)
+                        
+                        TimelineBlock(entry: item.entry, height: blockHeight)
+                            .frame(width: width - 2, height: blockHeight)
+                            .offset(x: xOffset, y: yOffset)
+                            .onTapGesture {
+                                selectedEntry = item.entry
+                            }
+                    }
+                    
+                    if Calendar.current.isDateInToday(date) {
+                        let curMins = Calendar.current.dateComponents([.hour, .minute], from: Date())
+                        let curY = CGFloat((curMins.hour ?? 0) * 60 + (curMins.minute ?? 0)) / 60.0 * hourHeight
+                        
+                        HStack(spacing: 0) {
+                            Circle().fill(Color.red).frame(width: 6, height: 6)
+                            Rectangle().fill(Color.red).frame(height: 1)
+                        }
+                        .padding(.leading, 45)
+                        .offset(y: curY - 3)
+                        .zIndex(2)
+                    }
                 }
-            } label: {
-                Text("今天")
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                .frame(height: hourHeight * 24)
             }
-            .padding(.leading, 8)
+            .padding(.trailing, 10)
+            .padding(.top, 10)
+        }
+    }
+}
+
+// MARK: - AppleWeekTimelineView
+struct AppleWeekTimelineView: View {
+    var viewModel: TimeTrackingViewModel
+    var date: Date
+    @Binding var selectedEntry: TimeEntry?
+    
+    let hourHeight: CGFloat = 40
+    
+    var body: some View {
+        let startOfWeek = DateHelper.startOfWeek(date)
+        let weekDays = (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: startOfWeek) }
+        
+        ScrollView(.vertical, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    Text("").frame(height: 20)
+                    ForEach(0..<24) { hour in
+                        Text("\(hour):00")
+                            .font(.system(size: 10))
+                            .foregroundColor(.gray)
+                            .frame(width: 25, height: hourHeight, alignment: .bottom)
+                    }
+                }
+                
+                ForEach(weekDays, id: \.self) { day in
+                    VStack(spacing: 0) {
+                        Text(dayHeader(day))
+                            .font(.system(size: 12))
+                            .foregroundColor(Calendar.current.isDateInToday(day) ? .blue : .primary)
+                            .padding(.bottom, 5)
+                        
+                        ZStack(alignment: .topLeading) {
+                            VStack(spacing: 0) {
+                                ForEach(0..<24) { _ in
+                                    Rectangle()
+                                        .strokeBorder(Color.gray.opacity(0.1), lineWidth: 0.5)
+                                        .frame(height: hourHeight)
+                                }
+                            }
+                            
+                            let entries = viewModel.entries(for: day)
+                            let layoutItems = TimelineLayoutEngine.layout(entries: entries)
+                            
+                            GeometryReader { geo in
+                                let availableWidth = geo.size.width
+                                ForEach(Array(layoutItems.enumerated()), id: \.element.entry.id) { index, item in
+                                    let yOffset = CGFloat(item.entry.startMinuteOfDay()) / 60.0 * hourHeight
+                                    let dMins = CGFloat(item.entry.endMinuteOfDay() - item.entry.startMinuteOfDay())
+                                    let height = max(dMins / 60.0 * hourHeight, 10)
+                                    let width = availableWidth / CGFloat(item.maxCol)
+                                    let xOff = width * CGFloat(item.col)
+                                    
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(item.entry.category.color.opacity(0.8))
+                                        .frame(width: width - 2, height: height)
+                                        .offset(x: xOff, y: yOffset)
+                                        .onTapGesture {
+                                            selectedEntry = item.entry
+                                        }
+                                }
+                            }
+                            .frame(height: hourHeight * 24)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.trailing, 5)
+        }
+    }
+    
+    func dayHeader(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "E\nd"
+        return f.string(from: date)
+    }
+}
+
+// MARK: - AppleMonthCalendarView
+struct AppleMonthCalendarView: View {
+    var viewModel: TimeTrackingViewModel
+    var date: Date
+    
+    let columns = Array(repeating: GridItem(.flexible()), count: 7)
+    
+    var body: some View {
+        VStack {
+            let days = stride(from: 0, to: 7, by: 1).map {
+                Calendar.current.date(byAdding: .day, value: $0, to: DateHelper.startOfWeek(Date()))!
+            }
+            HStack {
+                ForEach(days, id: \.self) { d in
+                    Text(d.formatted(.dateTime.weekday(.short)))
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.top, 10)
+            
+            let monthDays = getDaysInMonth()
+            LazyVGrid(columns: columns, spacing: 15) {
+                ForEach(0..<monthDays.count, id: \.self) { index in
+                    if let d = monthDays[index] {
+                        MonthDayCell(date: d, entries: viewModel.entries(for: d))
+                    } else {
+                        Color.clear.frame(height: 40)
+                    }
+                }
+            }
+            Spacer()
         }
         .padding(.horizontal)
-        .padding(.vertical, 8)
+    }
+    
+    func getDaysInMonth() -> [Date?] {
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year, .month], from: date)
+        comps.day = 1
+        let firstDay = cal.date(from: comps)!
+        let range = cal.range(of: .day, in: .month, for: firstDay)!
+        let startWeekday = cal.component(.weekday, from: firstDay) - cal.firstWeekday
+        let adjustedStart = startWeekday < 0 ? startWeekday + 7 : startWeekday
+        var result: [Date?] = Array(repeating: nil, count: adjustedStart)
+        for i in 1...range.count {
+            if let d = cal.date(byAdding: .day, value: i - 1, to: firstDay) {
+                result.append(d)
+            }
+        }
+        return result
     }
 }
 
-// MARK: - 日视图
-struct DayCalendarView: View {
-    @Bindable var viewModel: TimeTrackingViewModel
-    let date: Date
-    @Binding var selectedEntry: TimeEntry?
-
-    /// 每小时高度
-    private let hourHeight: CGFloat = 60
-    /// 显示的起始小时
-    private let startHour = 6
-    /// 显示的结束小时
-    private let endHour = 24
-    /// 吸附精度（分钟）
-    private let snapMinutes: CGFloat = 15
-
-    // MARK: - 拖动状态（F-09）
-    @State private var dragEntry: TimeEntry?
-    @State private var dragMode: DragMode = .none
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-
-    enum DragMode {
-        case none
-        case move           // 整体移动
-        case resizeTop      // 调整开始时间
-        case resizeBottom   // 调整结束时间
+struct MonthDayCell: View {
+    var date: Date
+    var entries: [TimeEntry]
+    var body: some View {
+        VStack(spacing: 2) {
+            Text("\(Calendar.current.component(.day, from: date))")
+                .font(.system(size: 14))
+                .foregroundColor(Calendar.current.isDateInToday(date) ? .white : .primary)
+                .background(
+                    Circle().fill(Calendar.current.isDateInToday(date) ? Color.blue : Color.clear)
+                        .frame(width: 25, height: 25)
+                )
+            
+            HStack(spacing: 2) {
+                let uniqueCategories = Array(Set(entries.map { $0.category })).prefix(3)
+                ForEach(uniqueCategories, id: \.rawValue) { cat in
+                    Circle()
+                        .fill(cat.color)
+                        .frame(width: 4, height: 4)
+                }
+            }
+            .frame(height: 5)
+        }
+        .frame(height: 40)
     }
+}
 
+// MARK: - AppleYearHeatmapView
+struct AppleYearHeatmapView: View {
+    var viewModel: TimeTrackingViewModel
+    var date: Date
+    
+    let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    
     var body: some View {
         ScrollView {
-            ZStack(alignment: .topLeading) {
-                // 时间刻度背景（可点击空白区补记录）
-                timeGridWithTap
-
-                // 时间块（含拖动支持）
-                draggableTimeBlocks
-
-                // 拖动时的吸附参考线
-                if isDragging {
-                    snapGuideLine
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(1...12, id: \.self) { month in
+                    MonthHeatmap(viewModel: viewModel, yearDate: date, month: month)
                 }
             }
-            .padding(.leading, 50) // 留出时间标签空间
-        }
-    }
-
-    // MARK: - 时间刻度（带空白区点击补记录）
-    private var timeGridWithTap: some View {
-        VStack(spacing: 0) {
-            ForEach(startHour..<endHour, id: \.self) { hour in
-                HStack(alignment: .top, spacing: 4) {
-                    Text(String(format: "%02d:00", hour))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
-                        .offset(x: -50)
-
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 0.5)
-                        .frame(maxWidth: .infinity)
-                }
-                .frame(height: hourHeight)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard !isDragging else { return }
-                    let calendar = Calendar.current
-                    if let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: date),
-                       let end = calendar.date(bySettingHour: hour + 1, minute: 0, second: 0, of: date) {
-                        viewModel.startBackfill(start: start, end: end)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - 可拖动时间块
-    private var draggableTimeBlocks: some View {
-        let entries = viewModel.entries(for: date).filter { !$0.isRunning }
-        return ForEach(entries) { entry in
-            DraggableTimeBlockCell(
-                entry: entry,
-                hourHeight: hourHeight,
-                startHour: startHour,
-                snapMinutes: snapMinutes,
-                dragEntry: $dragEntry,
-                dragMode: $dragMode,
-                dragOffset: $dragOffset,
-                isDragging: $isDragging,
-                onTap: {
-                    selectedEntry = entry
-                },
-                onDragEnd: { mode, totalOffset in
-                    applyDrag(entry: entry, mode: mode, offset: totalOffset)
-                }
-            )
-        }
-    }
-
-    // MARK: - 吸附参考线
-    private var snapGuideLine: some View {
-        Group {
-            if let entry = dragEntry {
-                let snappedMinute = snappedMinuteForDrag(entry: entry)
-                let y = CGFloat(snappedMinute - startHour * 60) / 60.0 * hourHeight
-
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(height: 2)
-                    .frame(maxWidth: .infinity)
-                    .offset(y: y)
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    // MARK: - 拖动逻辑
-
-    /// 计算吸附后的分钟值
-    private func snappedMinuteForDrag(entry: TimeEntry) -> Int {
-        let startMinute = entry.startMinuteOfDay()
-        let endMinute = entry.endMinuteOfDay()
-        let offsetMinutes = Int(dragOffset / hourHeight * 60)
-
-        let targetMinute: Int
-        switch dragMode {
-        case .move, .resizeTop:
-            targetMinute = startMinute + offsetMinutes
-        case .resizeBottom:
-            targetMinute = endMinute + offsetMinutes
-        case .none:
-            return startMinute
-        }
-
-        // 吸附到 snapMinutes 整数倍
-        let snapped = Int(round(Double(targetMinute) / Double(snapMinutes)) * Double(snapMinutes))
-        return max(startHour * 60, min(endHour * 60, snapped))
-    }
-
-    /// 应用拖动结果
-    private func applyDrag(entry: TimeEntry, mode: DragMode, offset: CGFloat) {
-        let offsetMinutes = offset / hourHeight * 60
-        let snappedOffset = round(offsetMinutes / snapMinutes) * snapMinutes
-        let deltaSeconds = TimeInterval(snappedOffset * 60)
-
-        guard abs(deltaSeconds) >= 60 else { return } // 至少 1 分钟变化
-
-        switch mode {
-        case .move:
-            let newStart = entry.startTime.addingTimeInterval(deltaSeconds)
-            viewModel.moveEntry(entry, toStartTime: newStart)
-        case .resizeTop:
-            let newStart = entry.startTime.addingTimeInterval(deltaSeconds)
-            viewModel.resizeEntryStart(entry, toStartTime: newStart)
-        case .resizeBottom:
-            let newEnd = (entry.endTime ?? Date()).addingTimeInterval(deltaSeconds)
-            viewModel.resizeEntryEnd(entry, toEndTime: newEnd)
-        case .none:
-            break
+            .padding()
         }
     }
 }
 
-// MARK: - 可拖动的时间块单元格
-struct DraggableTimeBlockCell: View {
-    let entry: TimeEntry
-    let hourHeight: CGFloat
-    let startHour: Int
-    let snapMinutes: CGFloat
-    @Binding var dragEntry: TimeEntry?
-    @Binding var dragMode: DayCalendarView.DragMode
-    @Binding var dragOffset: CGFloat
-    @Binding var isDragging: Bool
-    let onTap: () -> Void
-    let onDragEnd: (DayCalendarView.DragMode, CGFloat) -> Void
-
-    /// 拖动边缘检测区域高度
-    private let edgeHitArea: CGFloat = 14
-
-    private var isBeingDragged: Bool {
-        dragEntry?.id == entry.id && isDragging
-    }
-
+struct MonthHeatmap: View {
+    var viewModel: TimeTrackingViewModel
+    var yearDate: Date
+    var month: Int
+    
     var body: some View {
-        let startMinute = entry.startMinuteOfDay()
-        let endMinute = entry.endMinuteOfDay()
-        let baseTopOffset = CGFloat(startMinute - startHour * 60) / 60.0 * hourHeight
-        let baseHeight = max(CGFloat(endMinute - startMinute) / 60.0 * hourHeight, 24)
-
-        // 计算拖动中的偏移
-        let (displayTop, displayHeight) = calculateDisplayPosition(
-            baseTopOffset: baseTopOffset,
-            baseHeight: baseHeight,
-            isBeingDragged: isBeingDragged
-        )
-
-        return ZStack(alignment: .top) {
-            // 主体内容
-            timeBlockContent(height: displayHeight)
-
-            // 顶部拖动手柄（调整开始时间）
-            if displayHeight > 40 {
-                edgeHandle(isTop: true)
-                    .frame(height: edgeHitArea)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .gesture(edgeDragGesture(isTop: true))
-            }
-
-            // 底部拖动手柄（调整结束时间）
-            if displayHeight > 40 {
-                VStack {
-                    Spacer()
-                    edgeHandle(isTop: false)
-                        .frame(height: edgeHitArea)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .gesture(edgeDragGesture(isTop: false))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: displayHeight)
-        .offset(y: displayTop)
-        .padding(.horizontal, 4)
-        .zIndex(isBeingDragged ? 100 : 0)
-        .opacity(isBeingDragged ? 0.85 : 1.0)
-        .shadow(color: isBeingDragged ? .black.opacity(0.2) : .clear, radius: 8, y: 4)
-        .scaleEffect(isBeingDragged ? 1.02 : 1.0)
-        .animation(.easeInOut(duration: 0.15), value: isBeingDragged)
-        .onTapGesture {
-            if !isDragging {
-                onTap()
-            }
-        }
-        .gesture(moveDragGesture)
-    }
-
-    // MARK: - 计算拖动中的显示位置
-    private func calculateDisplayPosition(
-        baseTopOffset: CGFloat,
-        baseHeight: CGFloat,
-        isBeingDragged: Bool
-    ) -> (CGFloat, CGFloat) {
-        guard isBeingDragged else {
-            return (baseTopOffset, baseHeight)
-        }
-
-        switch dragMode {
-        case .move:
-            return (baseTopOffset + dragOffset, baseHeight)
-        case .resizeTop:
-            return (baseTopOffset + dragOffset, max(baseHeight - dragOffset, 24))
-        case .resizeBottom:
-            return (baseTopOffset, max(baseHeight + dragOffset, 24))
-        case .none:
-            return (baseTopOffset, baseHeight)
-        }
-    }
-
-    // MARK: - 时间块内容
-    private func timeBlockContent(height: CGFloat) -> some View {
-        HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(entry.category.color)
-                .frame(width: 4)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(entry.category.displayName)
-                        .font(.caption.bold())
-                        .foregroundStyle(entry.category.color)
-
-                    if entry.isDeepWork {
-                        Text("🔥")
-                            .font(.caption2)
+        let rows = Array(repeating: GridItem(.fixed(6), spacing: 2), count: 6)
+        
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(month)月")
+                .font(.system(size: 10, weight: .bold))
+            
+            let days = getMonthDays(month: month)
+            LazyHGrid(rows: rows, spacing: 2) {
+                ForEach(0..<days.count, id: \.self) { index in
+                    if let d = days[index] {
+                        let count = viewModel.entries(for: d).count
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(heatmapColor(count: count))
+                            .frame(width: 6, height: 6)
+                    } else {
+                        Color.clear.frame(width: 6, height: 6)
                     }
                 }
+            }
+        }
+        .frame(height: 80)
+    }
+    
+    func heatmapColor(count: Int) -> Color {
+        if count == 0 { return Color.gray.opacity(0.1) }
+        if count <= 2 { return Color.blue.opacity(0.3) }
+        if count <= 5 { return Color.blue.opacity(0.6) }
+        return Color.blue
+    }
+    
+    func getMonthDays(month: Int) -> [Date?] {
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year], from: yearDate)
+        comps.month = month
+        comps.day = 1
+        guard let firstDay = cal.date(from: comps) else { return [] }
+        let range = cal.range(of: .day, in: .month, for: firstDay)!
+        let start = (cal.component(.weekday, from: firstDay) - cal.firstWeekday + 7) % 7
+        var result: [Date?] = Array(repeating: nil, count: start)
+        for i in 1...range.count {
+            result.append(cal.date(byAdding: .day, value: i - 1, to: firstDay))
+        }
+        return result
+    }
+}
 
-                if height > 36 {
-                    Text("\(DateHelper.timeString(entry.startTime)) - \(entry.endTime.map(DateHelper.timeString) ?? "...")")
+// MARK: - TimelineBlock
+struct TimelineBlock: View {
+    var entry: TimeEntry
+    var height: CGFloat
+    
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(entry.category.color.opacity(0.2))
+            
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(entry.category.color.opacity(0.5), lineWidth: 1)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.category.rawValue)
+                    .font(.caption)
+                    .bold()
+                    .foregroundColor(entry.category.color)
+                    .lineLimit(1)
+                if height > 30 {
+                    Text(entry.subCategory ?? "")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                if height > 52, let notes = entry.notes {
-                    Text(notes)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.primary)
                         .lineLimit(1)
                 }
             }
-
-            Spacer()
-
-            Text(entry.formattedDuration)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            .padding(4)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(entry.category.color.opacity(isBeingDragged ? 0.2 : 0.12), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(
-                    isBeingDragged ? entry.category.color : entry.category.color.opacity(0.2),
-                    lineWidth: isBeingDragged ? 1.5 : 0.5
-                )
-        )
-    }
-
-    // MARK: - 边缘拖动手柄
-    private func edgeHandle(isTop: Bool) -> some View {
-        VStack(spacing: 0) {
-            if !isTop { Spacer() }
-            RoundedRectangle(cornerRadius: 2)
-                .fill(isBeingDragged && (dragMode == (isTop ? .resizeTop : .resizeBottom))
-                      ? entry.category.color
-                      : Color.secondary.opacity(0.3))
-                .frame(width: 32, height: 4)
-                .padding(.vertical, 2)
-            if isTop { Spacer() }
-        }
-    }
-
-    // MARK: - 整体移动手势（长按 + 拖动）
-    private var moveDragGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
-                switch value {
-                case .first(true):
-                    // 长按识别成功
-                    break
-                case .second(true, let drag):
-                    if let drag = drag {
-                        if !isDragging {
-                            startDrag(mode: .move)
-                        }
-                        dragOffset = drag.translation.height
-                    }
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                if isDragging {
-                    endDrag()
-                }
-            }
-    }
-
-    // MARK: - 边缘拖动手势
-    private func edgeDragGesture(isTop: Bool) -> some Gesture {
-        DragGesture(minimumDistance: 4)
-            .onChanged { value in
-                if !isDragging {
-                    startDrag(mode: isTop ? .resizeTop : .resizeBottom)
-                }
-                dragOffset = value.translation.height
-            }
-            .onEnded { _ in
-                endDrag()
-            }
-    }
-
-    private func startDrag(mode: DayCalendarView.DragMode) {
-        isDragging = true
-        dragEntry = entry
-        dragMode = mode
-        dragOffset = 0
-        // 触觉反馈
-        let impact = UIImpactFeedbackGenerator(style: .medium)
-        impact.impactOccurred()
-    }
-
-    private func endDrag() {
-        let finalOffset = dragOffset
-        let finalMode = dragMode
-
-        // 触觉反馈
-        let impact = UIImpactFeedbackGenerator(style: .light)
-        impact.impactOccurred()
-
-        onDragEnd(finalMode, finalOffset)
-
-        withAnimation(.easeOut(duration: 0.2)) {
-            isDragging = false
-            dragEntry = nil
-            dragMode = .none
-            dragOffset = 0
-        }
-    }
-}
-
-// MARK: - 周视图
-struct WeekCalendarView: View {
-    @Bindable var viewModel: TimeTrackingViewModel
-    let weekStartDate: Date
-    @Binding var selectedEntry: TimeEntry?
-
-    var body: some View {
-        let days = DateHelper.daysInWeek(of: weekStartDate)
-
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 2) {
-                ForEach(days, id: \.self) { day in
-                    WeekDayColumn(
-                        viewModel: viewModel,
-                        date: day,
-                        selectedEntry: $selectedEntry
-                    )
-                    .frame(width: 100)
-                }
-            }
-            .padding(.horizontal, 8)
-        }
-    }
-}
-
-// MARK: - 周视图中的一天列
-struct WeekDayColumn: View {
-    @Bindable var viewModel: TimeTrackingViewModel
-    let date: Date
-    @Binding var selectedEntry: TimeEntry?
-
-    var body: some View {
-        let entries = viewModel.entries(for: date)
-        let isToday = DateHelper.isToday(date)
-
-        VStack(spacing: 4) {
-            // 日期头
-            VStack(spacing: 2) {
-                Text(DateHelper.weekdayString(date))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("\(Calendar.current.component(.day, from: date))")
-                    .font(.headline)
-                    .foregroundStyle(isToday ? .white : .primary)
-                    .frame(width: 32, height: 32)
-                    .background(isToday ? Color.accentColor : Color.clear, in: Circle())
-            }
-            .padding(.bottom, 4)
-
-            // 时间块列表（紧凑模式）
-            if entries.isEmpty {
-                Text("无记录")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 8)
-            } else {
-                ForEach(entries) { entry in
-                    CompactTimeBlock(entry: entry)
-                        .onTapGesture {
-                            selectedEntry = entry
-                        }
-                }
-            }
-
-            Spacer()
-        }
-    }
-}
-
-// MARK: - 紧凑时间块（周视图用）
-struct CompactTimeBlock: View {
-    let entry: TimeEntry
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) {
-                Circle()
-                    .fill(entry.category.color)
-                    .frame(width: 6, height: 6)
-                Text(entry.category.displayName)
-                    .font(.caption2.bold())
-                    .lineLimit(1)
-            }
-            Text(entry.formattedDuration)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(4)
-        .background(entry.category.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
     }
 }
